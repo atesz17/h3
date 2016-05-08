@@ -1,0 +1,225 @@
+diff --git a/moquette_store.mapdb b/moquette_store.mapdb
+index 6e5b630..92931ff 100644
+Binary files a/moquette_store.mapdb and b/moquette_store.mapdb differ
+diff --git a/moquette_store.mapdb.p b/moquette_store.mapdb.p
+index 594af4d..1d8b647 100644
+Binary files a/moquette_store.mapdb.p and b/moquette_store.mapdb.p differ
+diff --git a/moquette_store.mapdb.t b/moquette_store.mapdb.t
+index a09cd30..1094c07 100644
+Binary files a/moquette_store.mapdb.t and b/moquette_store.mapdb.t differ
+diff --git a/src/hu/bme/mit/inf/irf/chat/application/ChatApplication.java b/src/hu/bme/mit/inf/irf/chat/application/ChatApplication.java
+index 2a1dd43..ebf4b36 100644
+--- a/src/hu/bme/mit/inf/irf/chat/application/ChatApplication.java
++++ b/src/hu/bme/mit/inf/irf/chat/application/ChatApplication.java
+@@ -9,18 +9,86 @@ import static hu.bme.mit.inf.irf.chat.network.MQTTPublisherSubscriber.testMqttCo
+ import hu.bme.mit.inf.irf.chat.network.MQTTSubscriberCallback;
+ import java.io.File;
+ import java.io.IOException;
++import java.lang.management.ManagementFactory;
+ import java.net.BindException;
+ import java.util.ArrayList;
+ import java.util.List;
++
++import javax.management.InstanceAlreadyExistsException;
++import javax.management.MBeanRegistrationException;
++import javax.management.MBeanServer;
++import javax.management.MalformedObjectNameException;
++import javax.management.NotCompliantMBeanException;
++import javax.management.ObjectName;
++
+ import org.eclipse.paho.client.mqttv3.MqttException;
+ import static org.eclipse.paho.client.mqttv3.MqttException.REASON_CODE_CLIENT_NOT_CONNECTED;
+ 
+ 
+-public class ChatApplication {
++public class ChatApplication implements Runnable {
++	
++	protected String[] args = null;
++	protected int port = -1;
++	protected String username = null;
++	protected MQTTConfiguration connectionConfiguration = null;
++	protected ChatInputConsole cons = null;
++	
++	public ChatApplication(String[] arguments)	{
++		this.args = arguments;
++	}
+ 
+     public static final void main(String[] args) {
+-        // parse command line arguments
+-        int port = -1;
++        ChatApplication app = new ChatApplication(args);
++        new Thread(app).start();
++        
++        ChatApplicationControl control = new ChatApplicationControl(app);
++        ObjectName name = null;
++        
++        try	{
++        	name = new ObjectName("hu.bme.mit.irf.chat.application:type=control");
++        } catch (MalformedObjectNameException e)	{
++        	// TODO
++        	e.printStackTrace();
++        }
++        
++        MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
++        
++        try	{
++        	mbs.registerMBean(control, name);
++        } catch(InstanceAlreadyExistsException e)	{
++        	e.printStackTrace();
++        } catch(MBeanRegistrationException e)	{
++        	e.printStackTrace();
++        } catch (NotCompliantMBeanException e) {
++			e.printStackTrace();
++		}
++    }
++
++    public static void startBroker(
++            final MQTTConfiguration connectionConfiguration,
++            final MQTTBrokerManager broker,
++            final int port) throws Exception {
++        try {
++            testMqttConnection(connectionConfiguration);
++        } catch (MqttException ex) {
++            try {
++                // start the broker, because it was not started yet
++                broker.startBroker(port);
++            } catch (IOException e) {
++                // if the connection after starting the broker is unsuccessful
++                if (e instanceof BindException) {
++                    testMqttConnection(connectionConfiguration);
++                } else {
++                    throw new IOException(e);
++                }
++            }
++
++        }
++    }
++
++	@Override
++	public void run() {
++		// parse command line arguments
+         File configXML = null;
+         List<String> errors = new ArrayList<>();
+ 
+@@ -66,12 +134,11 @@ public class ChatApplication {
+                 regManager.loadUsers(configXML);
+ 
+                 // authenticate the user
+-                String username = getAuthenticatedUsername(regManager);
++                username = getAuthenticatedUsername(regManager);
+ 
+                 // start the broker, if not started yet
+                 MQTTBrokerManager broker = new MQTTBrokerManager();
+-                MQTTConfiguration connectionConfiguration
+-                        = new MQTTConfiguration(port);
++                connectionConfiguration = new MQTTConfiguration(port);
+                 startBroker(connectionConfiguration, broker, port);
+ 
+                 // connect the chat client
+@@ -81,7 +148,7 @@ public class ChatApplication {
+                                 System.out);
+ 
+                 // start the chat
+-                ChatInputConsole cons = new ChatInputConsole(
++                cons = new ChatInputConsole(
+                         subscriber, username);
+                 new Thread(cons).start();
+ 
+@@ -95,27 +162,5 @@ public class ChatApplication {
+                 System.exit(-1);
+             }
+         }
+-    }
+-
+-    public static void startBroker(
+-            final MQTTConfiguration connectionConfiguration,
+-            final MQTTBrokerManager broker,
+-            final int port) throws Exception {
+-        try {
+-            testMqttConnection(connectionConfiguration);
+-        } catch (MqttException ex) {
+-            try {
+-                // start the broker, because it was not started yet
+-                broker.startBroker(port);
+-            } catch (IOException e) {
+-                // if the connection after starting the broker is unsuccessful
+-                if (e instanceof BindException) {
+-                    testMqttConnection(connectionConfiguration);
+-                } else {
+-                    throw new IOException(e);
+-                }
+-            }
+-
+-        }
+-    }
++	}
+ }
+diff --git a/src/hu/bme/mit/inf/irf/chat/console/ChatInputConsole.java b/src/hu/bme/mit/inf/irf/chat/console/ChatInputConsole.java
+index 6b079f0..9d50073 100644
+--- a/src/hu/bme/mit/inf/irf/chat/console/ChatInputConsole.java
++++ b/src/hu/bme/mit/inf/irf/chat/console/ChatInputConsole.java
+@@ -2,17 +2,22 @@ package hu.bme.mit.inf.irf.chat.console;
+ 
+ import hu.bme.mit.inf.irf.chat.data.Message;
+ import hu.bme.mit.inf.irf.chat.network.MQTTSubscriberCallback;
++
++import java.util.ArrayList;
++import java.util.Collection;
+ import java.util.Scanner;
+ 
+ public class ChatInputConsole implements Runnable {
+ 
+     private final MQTTSubscriberCallback mqttConnection;
+     private final String author;
++    private Collection<String> filteredWords;
+ 
+     public ChatInputConsole(final MQTTSubscriberCallback mqttConnection,
+             final String author) {
+         this.mqttConnection = mqttConnection;
+         this.author = author;
++        filteredWords = new ArrayList<String>();
+     }
+ 
+     @Override
+@@ -27,10 +32,41 @@ public class ChatInputConsole implements Runnable {
+ 
+         while (!Thread.currentThread().isInterrupted()) {
+             String text = scanner.nextLine();
++            
++            // filter word
++            text = filterText(text);
+ 
+             Message message = new Message(author, text);
+             mqttConnection.publishMessage(message);
+         }
+     }
++    
++    /**
++     * 
++     * Returns the given text filtered.
++     * 
++     * @param text - this text will be filtered
++     * @return
++     */
++    private String filterText(String text)	{
++    	String newText = text;
++    	for (String word : filteredWords)	{
++    		newText = newText.replaceAll(word, "****");
++    	}
++    	return newText;
++    }
++    
++    /**
++     * 
++     * Adds the specified word to the filtered list, this word
++     * will not be displayed at client side. Case-sensitive.
++     * 
++     * @param word - this word will be filtered
++     */
++    public void AddFilteredWord(String word)	{
++    	if (!filteredWords.contains(word))	{
++    		filteredWords.add(word);
++    	}
++    }
+ 
+ }

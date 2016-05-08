@@ -54,4 +54,8 @@ public class MQTTSubscriberCallback implements MqttCallback {
         Message message = new Gson().fromJson(messageJson, Message.class);
         return message;
     }
+    
+    public ChatOutputConsole getChatOutput()	{
+    	return chatOutput;
+    }
 }
